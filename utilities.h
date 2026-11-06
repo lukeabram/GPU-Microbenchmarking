@@ -1,4 +1,11 @@
 #pragma once
+#include <cstdint>
+#include <cstdlib>
+#include <span>
+#include <stdio.h>
+#include <stdlib.h>
+#include <type_traits>
+
 // Fail fast on any CUDA error.
 #define CUDA_CHECK(stmt)                                                       \
   do {                                                                         \
@@ -33,28 +40,29 @@ template <typename T> void printVec(std::span<T> vec) {
   printf("\n");
 }
 
-template <typename Setup, typename Launch, typename Cleanup>
-long long timeKernel(Setup &setup, Launch &launch size_t iterations) {
-  size_t repeat = 10;
+template <typename Setup, typename Launch>
+long long timeKernel(Setup &&setup, Launch &&launch) {
   long long *timeCycles = nullptr;
   long long cyclesOut = 0;
-  // General purpose data used for benchmark timings
-  void **data = nullptr;
-  // Used to prevent compiler from optimizing out the kernel
-  void **out = nullptr;
 
-  // data
-  void **pointers = nullptr;
+  // General purpose data used for benchmark timings
+  void *data = nullptr;
+  // Used to prevent compiler from optimizing out the kernel
+  size_t *out = nullptr;
 
   // allocate memory
   CUDA_CHECK(cudaMalloc((void **)&timeCycles, sizeof(long long)));
-  CUDA_CHECK(cudaMalloc((void **)&out, sizeof(void *)));
+  CUDA_CHECK(cudaMalloc((void **)&out, sizeof(size_t)));
+  // Sentinel: if the kernel never writes, we see -1 instead of a silent 0.
+  CUDA_CHECK(cudaMemset(timeCycles, 0xFF, sizeof(long long)));
 
   // setup
-  setup();
+  setup(data);
 
   // run/time kernel
-  launch(timeCycles, out);
+  launch(data, timeCycles, out);
+  CUDA_CHECK(cudaGetLastError());      // launch errors (bad arch, bad config)
+  CUDA_CHECK(cudaDeviceSynchronize()); // runtime errors (illegal address, ...)
 
   CUDA_CHECK(cudaMemcpy(&cyclesOut, timeCycles, sizeof(long long),
                         cudaMemcpyDeviceToHost));
